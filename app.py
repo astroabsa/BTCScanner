@@ -2,7 +2,7 @@ import streamlit as st
 from data.deribit import get_btc_options, get_btc_price, get_funding
 from analytics.pcr import compute_pcr
 from analytics.max_pain import compute_max_pain
-from btcscanner.engine.bias_engine import get_bias
+from engine.bias_engine import get_bias
 
 st.set_page_config(layout="wide")
 st.title("BTC Derivatives Sentiment Engine")
