@@ -1,0 +1,15 @@
+def get_bias(pcr, funding):
+    score = 0
+
+    if pcr < 0.7: score += 2
+    elif pcr > 1.1: score -= 2
+
+    if funding < 0: score += 1
+    if funding > 0: score -= 1
+
+    if score >= 2:
+        return "Bullish"
+    elif score <= -2:
+        return "Bearish"
+    else:
+        return "Range"
