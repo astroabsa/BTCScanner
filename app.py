@@ -606,9 +606,9 @@ try:
         if show_full_chain:
             st.subheader("Full Option Chain (ATM ±2 Strikes)")
             display_cols = [
-                "Strike",
-                "CE_Ltp", "CE_OI", "CE_Vol",
-                "PE_Ltp", "PE_OI", "PE_Vol",
+                "strike",
+                "ce_ltp", "ce_oi", "ce_vol",
+                "pe_ltp", "pe_oi", "pe_vol",
             ]
 
             df_chain = df.sort_values("strike").reset_index(drop=True)
