@@ -4,12 +4,12 @@ from dhanhq import dhanhq
 from datetime import datetime
 from dateutil.parser import isoparse
 from streamlit_autorefresh import st_autorefresh
-from zoneinfo import ZoneInfo  # for IST timezone handling[web:86][web:91]
+from zoneinfo import ZoneInfo  # IST timezone[web:86][web:91]
 
 # ----------------- PAGE CONFIG -----------------
 
 st.set_page_config(
-    page_title="Nifty Weekly Option Chain Scanner (DhanHQ)",
+    page_title="Nifty Option Chain Scanner (DhanHQ)",
     layout="wide"
 )
 
@@ -33,8 +33,7 @@ def get_dhan_client():
 
 def get_nearest_weekly_expiry(client) -> str | None:
     """
-    expiry_list() response shape:
-
+    expiry_list() response shape:[web:19][web:40]
     {
       "status": "success",
       "remarks": "",
@@ -42,7 +41,7 @@ def get_nearest_weekly_expiry(client) -> str | None:
         "data": ["YYYY-MM-DD", ...],
         "status": "success"
       }
-    }[web:19][web:40]
+    }
     """
     resp = client.expiry_list(
         under_security_id=NIFTY_UNDER_SECURITY_ID,
@@ -160,7 +159,7 @@ def find_oi_support_resistance(df: pd.DataFrame, underlying_ltp: float):
     return support, resistance
 
 
-def select_strikes(df: pd.DataFrame, underlying_ltp: float, count: int = 3):
+def select_strikes(df: pd.DataFrame, underlying_ltp: float, count: int = 4):
     atm_strike = float(df.loc[df["abs_diff"].idxmin(), "strike"])
     window = df[df["strike"].between(atm_strike - 400, atm_strike + 400)].copy()
 
@@ -219,18 +218,29 @@ def generate_directional_view(sentiment, support, resistance, underlying_ltp):
     return "No clear edge; avoid fresh directional trade."
 
 
-# ----------------- UI + AUTO REFRESH -----------------
+# ----------------- SIDEBAR (controls) -----------------
+
+with st.sidebar:
+    st.title("Settings")
+    st.markdown("Configure **refresh** and **display** options here.")
+    auto_refresh = st.checkbox("Auto refresh", value=True)
+    refresh_secs = st.slider("Refresh interval (seconds)", 30, 300, 120, 30)
+    show_full_chain = st.checkbox("Show full option chain table", value=False)
+    st.markdown("---")
+    st.caption("Built on DhanHQ Option Chain & Expiry APIs.[web:19]")
+
+# Trigger auto-refresh if enabled
+if auto_refresh:
+    st_autorefresh(interval=refresh_secs * 1000, key="nifty_scan_refresh")
+
+
+# ----------------- MAIN HEADER -----------------
 
 st.title("Nifty Weekly Option Chain Scanner (DhanHQ)")
-st.caption("Uses DhanHQ Option Chain & Expiry APIs. Educational use only, not trading advice.[web:19]")
-
-# Auto-refresh every 2 minutes (120000 ms)
-refresh_count = st_autorefresh(interval=2 * 60 * 1000, key="nifty_scan_refresh")
-st.write(f"Auto-refresh count: {refresh_count}")
-
-# IST timestamp
 ist_now = datetime.now(ZoneInfo("Asia/Kolkata"))
-st.write(f"Last updated at (IST): {ist_now.strftime('%d-%m-%Y %H:%M:%S')}")
+st.write(f"Last updated (IST): **{ist_now.strftime('%d-%m-%Y %H:%M:%S')}**")
+
+# ----------------- DATA FETCH -----------------
 
 try:
     client = get_dhan_client()
@@ -250,48 +260,95 @@ try:
     atm_bu_strike, ce_bu, pe_bu = get_atm_buildup(df, underlying_ltp)
     view = generate_directional_view(sentiment, support, resistance, underlying_ltp)
 
-    # -------- Overview --------
-    st.subheader("Overview")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Nifty LTP", f"{underlying_ltp:.2f}")
-    c2.metric("Nearest Weekly Expiry", expiry)
-    c3.metric("PCR", f"{pcr:.2f}" if pcr is not None else "N/A")
-    c4.metric("Sentiment", sentiment)
+    # ----------------- TABS LAYOUT -----------------
+    tab_summary, tab_strikes, tab_chain = st.tabs(
+        ["Summary", "Strikes & View", "Full Option Chain"]
+    )  # Tabs help organize more info with less scrolling.[web:94][web:103]
 
-    # -------- Support / Resistance --------
-    st.subheader("Support & Resistance (from OI)")
-    col1, col2 = st.columns(2)
-    if support:
-        col1.write(f"Support (Put OI): **{support[0]}** | OI: {support[1]}")
-    else:
-        col1.write("Support: N/A")
-    if resistance:
-        col2.write(f"Resistance (Call OI): **{resistance[0]}** | OI: {resistance[1]}")
-    else:
-        col2.write("Resistance: N/A")
+    # ===== TAB 1: SUMMARY =====
+    with tab_summary:
+        # Top metrics in a single row
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Nifty LTP", f"{underlying_ltp:.2f}")
+        m2.metric("Nearest Weekly Expiry", expiry)
+        m3.metric("PCR", f"{pcr:.2f}" if pcr is not None else "N/A")
+        m4.metric("Sentiment", sentiment)
 
-    # -------- Buildup --------
-    st.subheader("Buildup at ATM")
-    st.write(f"ATM Strike: **{atm_bu_strike}**")
-    st.write(f"Call (CE) buildup: {ce_bu}")
-    st.write(f"Put (PE) buildup: {pe_bu}")
+        # Support / Resistance + Buildup side-by-side
+        c1, c2 = st.columns(2)
 
-    # -------- Strike Selection --------
-    st.subheader("Strike Selection (Liquid near ATM)")
-    st.write(f"ATM Strike used for selection: **{atm_strike}**")
+        with c1:
+            st.subheader("Support & Resistance")
+            if support:
+                st.write(f"Support (Put OI): **{support[0]}**  | OI: {support[1]}")
+            else:
+                st.write("Support: N/A")
+            if resistance:
+                st.write(f"Resistance (Call OI): **{resistance[0]}**  | OI: {resistance[1]}")
+            else:
+                st.write("Resistance: N/A")
 
-    st.markdown("**Suggested Call (CE) strikes**")
-    st.dataframe(ce_candidates, use_container_width=True)
+        with c2:
+            st.subheader("ATM Buildup")
+            st.write(f"ATM Strike: **{atm_bu_strike}**")
+            st.write(f"Call (CE) buildup: {ce_bu}")
+            st.write(f"Put (PE) buildup: {pe_bu}")
 
-    st.markdown("**Suggested Put (PE) strikes**")
-    st.dataframe(pe_candidates, use_container_width=True)
+        st.subheader("Scanner Interpretation")
+        st.write(view)
+        st.caption(
+            "Logic uses PCR, OI-based support/resistance, and ATM buildup from Dhan Option Chain snapshot.[web:19]"
+        )
 
-    # -------- Interpretation --------
-    st.subheader("Scanner Interpretation")
-    st.write(view)
-    st.caption(
-        "Logic uses PCR, OI-based support/resistance, and ATM buildup from Dhan Option Chain snapshot.[web:19]"
-    )
+    # ===== TAB 2: STRIKES & VIEW =====
+    with tab_strikes:
+        st.subheader("Liquid Strikes Near ATM")
+        st.write(f"ATM Strike used for selection: **{atm_strike}**")
+
+        left, right = st.columns(2)
+        with left:
+            st.markdown("**Suggested Call (CE) strikes**")
+            st.dataframe(
+                ce_candidates.set_index("strike"),
+                use_container_width=True,
+                height=250,
+            )
+        with right:
+            st.markdown("**Suggested Put (PE) strikes**")
+            st.dataframe(
+                pe_candidates.set_index("strike"),
+                use_container_width=True,
+                height=250,
+            )
+
+        # Quick visual of OI concentration around ATM (compact bar charts)
+        st.subheader("OI Snapshot Around ATM (Compact View)")
+        around = df[df["strike"].between(atm_strike - 300, atm_strike + 300)].copy()
+        oi_view = around[["strike", "ce_oi", "pe_oi"]].set_index("strike")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("Call OI by strike")
+            st.bar_chart(oi_view[["ce_oi"]], height=220)
+        with c2:
+            st.caption("Put OI by strike")
+            st.bar_chart(oi_view[["pe_oi"]], height=220)
+
+    # ===== TAB 3: FULL OPTION CHAIN =====
+    with tab_chain:
+        if show_full_chain:
+            st.subheader("Full Option Chain (Current Expiry)")
+            display_cols = [
+                "strike",
+                "ce_ltp", "ce_oi", "ce_vol",
+                "pe_ltp", "pe_oi", "pe_vol",
+            ]
+            st.dataframe(
+                df[display_cols].set_index("strike"),
+                use_container_width=True,
+                height=450,
+            )
+        else:
+            st.info("Enable 'Show full option chain table' in sidebar to view complete chain.")
 
 except Exception as e:
     st.error("Unhandled exception:")
