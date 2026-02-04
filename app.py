@@ -334,21 +334,32 @@ try:
             st.bar_chart(oi_view[["pe_oi"]], height=220)
 
     # ===== TAB 3: FULL OPTION CHAIN =====
-    with tab_chain:
-        if show_full_chain:
-            st.subheader("Full Option Chain (Current Expiry)")
-            display_cols = [
-                "strike",
-                "ce_ltp", "ce_oi", "ce_vol",
-                "pe_ltp", "pe_oi", "pe_vol",
-            ]
-            st.dataframe(
-                df[display_cols].set_index("strike"),
-                use_container_width=True,
-                height=450,
-            )
-        else:
-            st.info("Enable 'Show full option chain table' in sidebar to view complete chain.")
+with tab_chain:
+    if show_full_chain:
+        st.subheader("Full Option Chain (Current Expiry)")
+
+        display_cols = [
+            "strike",
+            "ce_ltp", "ce_oi", "ce_vol",
+            "pe_ltp", "pe_oi", "pe_vol",
+        ]
+
+        # Remove rows where all option values are zero (no trading interest)
+        numeric_cols = ["ce_ltp", "ce_oi", "ce_vol", "pe_ltp", "pe_oi", "pe_vol"]
+        df_nonzero = df.copy()
+        df_nonzero["row_sum"] = df_nonzero[numeric_cols].sum(axis=1)
+        df_nonzero = df_nonzero[df_nonzero["row_sum"] != 0]
+        df_nonzero = df_nonzero.drop(columns=["row_sum"])
+
+        st.dataframe(
+            df_nonzero[display_cols],
+            use_container_width=True,
+            height=450,
+            hide_index=True,
+        )
+    else:
+        st.info("Enable 'Show full option chain table' in sidebar to view complete chain.")
+
 
 except Exception as e:
     st.error("Unhandled exception:")
