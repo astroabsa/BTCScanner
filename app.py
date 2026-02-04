@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from dateutil.parser import isoparse
 from streamlit_autorefresh import st_autorefresh
 from zoneinfo import ZoneInfo  # IST timezone[web:86][web:91]
-import plotly.graph_objects as go  # custom-colored charts[web:201][web:207]
+import plotly.graph_objects as go  # custom-colored charts[web:201]
 
 # ----------------- PAGE CONFIG -----------------
 
@@ -133,7 +133,7 @@ def get_nifty_option_chain(client, expiry_iso: str):
 def get_5min_trend_and_vwap(client):
     """
     Uses intraday_minute_data with interval=5 to compute EMA20 + VWAP trend
-    for Nifty index over today's session.[page:1][web:154][web:157]
+    for Nifty index over today's session.[web:154][web:157]
     """
     today = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
     from_date = (datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -406,7 +406,7 @@ try:
         st.error("No option chain rows received.")
         st.stop()
 
-    # Maintain intraday snapshots (last 3) for ΔOI & ΔLTP table
+    # Maintain intraday snapshots (last 3) for ΔOI & ΔLTP, and a fixed "base" snapshot.
     if "snapshots" not in st.session_state:
         st.session_state["snapshots"] = []
     st.session_state["snapshots"].append(
@@ -414,6 +414,12 @@ try:
     )
     if len(st.session_state["snapshots"]) > 3:
         st.session_state["snapshots"].pop(0)
+
+    # First snapshot of this session: used as baseline for intraday ΔOI chart.[web:245][web:249]
+    if "base_snapshot" not in st.session_state:
+        st.session_state["base_snapshot"] = st.session_state["snapshots"][0]
+
+    base_snapshot_df = st.session_state["base_snapshot"]
 
     prev_intra_df = None
     if len(st.session_state["snapshots"]) >= 2:
@@ -561,37 +567,45 @@ try:
         )
         st.plotly_chart(fig_oi, use_container_width=True, config={"displayModeBar": False})
 
-        # -------- ΔOI chart (day change vs previous close) --------
-        st.subheader("Day Change in OI (Call & Put)")
+        # -------- Intraday ΔOI chart (vs first snapshot of this session) --------
+        st.subheader("Intraday Change in OI (from first snapshot)")
 
-        delta_df = df[df["strike"].between(atm_strike - 300, atm_strike + 300)].copy()
-        delta_df = delta_df[["strike", "ce_oi", "ce_prev_oi", "pe_oi", "pe_prev_oi"]]
+        if base_snapshot_df is not None and not base_snapshot_df.empty:
+            base_subset = base_snapshot_df[["strike", "ce_oi", "pe_oi"]]
+            merged = oi_df.merge(
+                base_subset,
+                on="strike",
+                how="left",
+                suffixes=("", "_base"),
+            )
 
-        delta_df["ce_ΔOI_day"] = delta_df["ce_oi"] - delta_df["ce_prev_oi"].fillna(0)
-        delta_df["pe_ΔOI_day"] = delta_df["pe_oi"] - delta_df["pe_prev_oi"].fillna(0)
+            merged["ce_ΔOI_intraday"] = merged["ce_oi"] - merged["ce_oi_base"].fillna(0)
+            merged["pe_ΔOI_intraday"] = merged["pe_oi"] - merged["pe_oi_base"].fillna(0)
 
-        fig_delta = go.Figure()
-        fig_delta.add_bar(
-            name="Call ΔOI (day)",
-            x=delta_df["strike"],
-            y=delta_df["ce_ΔOI_day"],
-            marker_color="red",
-        )
-        fig_delta.add_bar(
-            name="Put ΔOI (day)",
-            x=delta_df["strike"],
-            y=delta_df["pe_ΔOI_day"],
-            marker_color="green",
-        )
-        fig_delta.update_layout(
-            barmode="group",
-            title="Change in OI by strike (since previous close)",
-            xaxis_title="Strike",
-            yaxis_title="ΔOI (day)",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(t=50, b=20),
-        )
-        st.plotly_chart(fig_delta, use_container_width=True, config={"displayModeBar": False})
+            fig_delta = go.Figure()
+            fig_delta.add_bar(
+                name="Call ΔOI (intraday)",
+                x=merged["strike"],
+                y=merged["ce_ΔOI_intraday"],
+                marker_color="red",
+            )
+            fig_delta.add_bar(
+                name="Put ΔOI (intraday)",
+                x=merged["strike"],
+                y=merged["pe_ΔOI_intraday"],
+                marker_color="green",
+            )
+            fig_delta.update_layout(
+                barmode="group",
+                title="Change in OI by strike (vs first snapshot this session)",
+                xaxis_title="Strike",
+                yaxis_title="ΔOI (intraday)",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(t=50, b=20),
+            )
+            st.plotly_chart(fig_delta, use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.info("Intraday ΔOI will appear after at least one snapshot is stored.")
 
     # ===== TAB 3: FULL OPTION CHAIN (ATM ±2 only) =====
     with tab_chain:
