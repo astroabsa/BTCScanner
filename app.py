@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo  # IST timezone[web:86][web:91]
 # ----------------- PAGE CONFIG -----------------
 
 st.set_page_config(
-    page_title="Nifty Option Chain Scanner (DhanHQ)",
+    page_title="Nifty Weekly Option Chain Scanner (DhanHQ)",
     layout="wide"
 )
 
@@ -225,7 +225,7 @@ with st.sidebar:
     st.markdown("Configure **refresh** and **display** options here.")
     auto_refresh = st.checkbox("Auto refresh", value=True)
     refresh_secs = st.slider("Refresh interval (seconds)", 30, 300, 120, 30)
-    show_full_chain = st.checkbox("Show full option chain table", value=False)
+    show_full_chain = st.checkbox("Show full option chain table", value=True)
     st.markdown("---")
     st.caption("Built on DhanHQ Option Chain & Expiry APIs.[web:19]")
 
@@ -267,14 +267,12 @@ try:
 
     # ===== TAB 1: SUMMARY =====
     with tab_summary:
-        # Top metrics in a single row
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Nifty LTP", f"{underlying_ltp:.2f}")
         m2.metric("Nearest Weekly Expiry", expiry)
         m3.metric("PCR", f"{pcr:.2f}" if pcr is not None else "N/A")
         m4.metric("Sentiment", sentiment)
 
-        # Support / Resistance + Buildup side-by-side
         c1, c2 = st.columns(2)
 
         with c1:
@@ -321,7 +319,6 @@ try:
                 height=250,
             )
 
-        # Quick visual of OI concentration around ATM (compact bar charts)
         st.subheader("OI Snapshot Around ATM (Compact View)")
         around = df[df["strike"].between(atm_strike - 300, atm_strike + 300)].copy()
         oi_view = around[["strike", "ce_oi", "pe_oi"]].set_index("strike")
@@ -334,32 +331,29 @@ try:
             st.bar_chart(oi_view[["pe_oi"]], height=220)
 
     # ===== TAB 3: FULL OPTION CHAIN =====
-with tab_chain:
-    if show_full_chain:
-        st.subheader("Full Option Chain (Current Expiry)")
+    with tab_chain:
+        if show_full_chain:
+            st.subheader("Full Option Chain (Current Expiry)")
 
-        display_cols = [
-            "strike",
-            "ce_ltp", "ce_oi", "ce_vol",
-            "pe_ltp", "pe_oi", "pe_vol",
-        ]
+            display_cols = [
+                "strike",
+                "ce_ltp", "ce_oi", "ce_vol",
+                "pe_ltp", "pe_oi", "pe_vol",
+            ]
 
-        # Remove rows where all option values are zero (no trading interest)
-        numeric_cols = ["ce_ltp", "ce_oi", "ce_vol", "pe_ltp", "pe_oi", "pe_vol"]
-        df_nonzero = df.copy()
-        df_nonzero["row_sum"] = df_nonzero[numeric_cols].sum(axis=1)
-        df_nonzero = df_nonzero[df_nonzero["row_sum"] != 0]
-        df_nonzero = df_nonzero.drop(columns=["row_sum"])
+            # Remove rows where all option values are zero (no trading interest).[web:121]
+            numeric_cols = ["ce_ltp", "ce_oi", "ce_vol", "pe_ltp", "pe_oi", "pe_vol"]
+            df_nonzero = df.copy()
+            df_nonzero = df_nonzero[~(df_nonzero[numeric_cols] == 0).all(axis=1)]
 
-        st.dataframe(
-            df_nonzero[display_cols],
-            use_container_width=True,
-            height=450,
-            hide_index=True,
-        )
-    else:
-        st.info("Enable 'Show full option chain table' in sidebar to view complete chain.")
-
+            st.dataframe(
+                df_nonzero[display_cols],
+                use_container_width=True,
+                height=450,
+                hide_index=True,
+            )
+        else:
+            st.info("Enable 'Show full option chain table' in sidebar to view complete chain.")
 
 except Exception as e:
     st.error("Unhandled exception:")
