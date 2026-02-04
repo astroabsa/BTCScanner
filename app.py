@@ -10,11 +10,12 @@ st.set_page_config(
 )
 
 # ----------------- CONSTANTS -----------------
-# From Dhan docs: UnderlyingScrip=13 and UnderlyingSeg="IDX_I" for Nifty index options.[web:19][web:40][web:58]
+# From Dhan Option Chain docs: Nifty index underlying + index segment.[web:19][web:40]
 NIFTY_UNDER_SECURITY_ID = 13
+UNDER_EXCHANGE_SEGMENT = "IDX_I"
 
 
-# ----------------- BASIC DHAN TEST -----------------
+# ----------------- Dhan helpers -----------------
 
 def get_dhan_client():
     try:
@@ -26,88 +27,102 @@ def get_dhan_client():
     return dhanhq(client_id, access_token)
 
 
-def test_dhan_calls():
+def get_nearest_weekly_expiry(client) -> str | None:
     """
-    Minimal test: just call expiry_list() and option_chain() once
-    with hard-coded parameters. No extra logic.
-    This will tell us exactly where invalid literal for int() is raised.
+    Uses expiry_list() and picks nearest future expiry.
+    Response shape:
+    {
+      "status": "success",
+      "remarks": "",
+      "data": {
+          "data": ["YYYY-MM-DD", ...],
+          "status": "success"
+      }
+    }[web:19][web:40]
     """
-    client = get_dhan_client()
+    resp = client.expiry_list(
+        under_security_id=NIFTY_UNDER_SECURITY_ID,
+        under_exchange_segment=UNDER_EXCHANGE_SEGMENT,
+    )
 
-    st.write("Using Dhan INDEX constant:", client.INDEX, type(client.INDEX))
-
-    # ---- 1) Test expiry_list ----
-    st.write("Calling expiry_list()...")
-    try:
-        resp = client.expiry_list(
-            under_security_id=NIFTY_UNDER_SECURITY_ID,
-            under_exchange_segment=client.INDEX,  # 'IDX_I'[web:58]
-        )
-        st.write("expiry_list() raw response:", resp)
-    except Exception as e:
-        st.error("Exception in expiry_list():")
-        st.exception(e)
-        st.stop()
-
-    expiries = resp.get("data") or []
+    outer = resp.get("data") or {}
+    expiries = outer.get("data") or []
     if not expiries:
-        st.error("No expiries returned from expiry_list().")
-        st.stop()
+        st.error("No expiries returned from Dhan expiry_list().")
+        return None
 
     expiry_dates = [isoparse(str(d)).date() for d in expiries]
     today = datetime.now().date()
     future = [d for d in expiry_dates if d >= today]
     if not future:
-        st.error("No future expiry from expiry_list().")
-        st.stop()
+        st.error("No future expiry dates found.")
+        return None
 
-    nearest_expiry = min(future).isoformat()
-    st.write("Nearest expiry picked:", nearest_expiry)
+    return min(future).isoformat()
 
-    # ---- 2) Test option_chain ----
-    st.write("Calling option_chain()...")
-    try:
-        oc_resp = client.option_chain(
-            under_security_id=NIFTY_UNDER_SECURITY_ID,
-            under_exchange_segment=client.INDEX,
-            expiry=nearest_expiry,
-        )
-        st.write("option_chain() top-level keys:", list(oc_resp.keys()))
-    except Exception as e:
-        st.error("Exception in option_chain():")
-        st.exception(e)
-        st.stop()
 
-    data = oc_resp.get("data") or {}
-    st.write("option_chain() data keys:", list(data.keys()))
+def get_nifty_option_chain(client, expiry_iso: str):
+    """
+    Calls option_chain() and converts to DataFrame.
+    Simplified response (per Dhan docs):[web:19][web:40]
+    {
+      "status": "success",
+      "data": {
+        "last_price": 24964.25,
+        "oc": {
+          "25000.000000": {
+             "ce": { "last_price": ..., "oi": ..., "previous_close_price": ..., "previous_oi": ..., "volume": ... },
+             "pe": { ... }
+          },
+          ...
+        }
+      }
+    }
+    """
+    resp = client.option_chain(
+        under_security_id=NIFTY_UNDER_SECURITY_ID,
+        under_exchange_segment=UNDER_EXCHANGE_SEGMENT,
+        expiry=expiry_iso,
+    )
 
-    ltp = float(data.get("last_price", 0.0))
-    st.write("Underlying last_price:", ltp)
+    data = resp.get("data") or {}
+    underlying_ltp = float(data.get("last_price", 0.0))
 
     oc_dict = data.get("oc") or {}
-    st.write("Number of strikes in oc:", len(oc_dict))
+    if not oc_dict:
+        st.error("Option chain 'oc' section is empty.")
+        return underlying_ltp, pd.DataFrame()
 
-    # Convert a few rows just to confirm everything is numeric
     rows = []
-    for i, (strike_str, legs) in enumerate(oc_dict.items()):
-        if i >= 5:
-            break
+    for strike_str, legs in oc_dict.items():
+        try:
+            strike = float(strike_str)
+        except ValueError:
+            continue
+
         ce = legs.get("ce", {}) or {}
         pe = legs.get("pe", {}) or {}
+
         rows.append({
-            "strike": float(strike_str),
+            "strike": strike,
             "ce_ltp": float(ce.get("last_price", 0.0) or 0.0),
             "ce_oi": int(ce.get("oi", 0) or 0),
+            "ce_prev_price": float(ce.get("previous_close_price", 0.0) or 0.0),
+            "ce_prev_oi": int(ce.get("previous_oi", 0) or 0),
+            "ce_vol": int(ce.get("volume", 0) or 0),
             "pe_ltp": float(pe.get("last_price", 0.0) or 0.0),
             "pe_oi": int(pe.get("oi", 0) or 0),
+            "pe_prev_price": float(pe.get("previous_close_price", 0.0) or 0.0),
+            "pe_prev_oi": int(pe.get("previous_oi", 0) or 0),
+            "pe_vol": int(pe.get("volume", 0) or 0),
         })
 
-    df = pd.DataFrame(rows)
-    st.write("Sample parsed DataFrame (first 5 strikes):")
-    st.dataframe(df)
+    df = pd.DataFrame(rows).sort_values("strike").reset_index(drop=True)
+    df["abs_diff"] = (df["strike"] - underlying_ltp).abs()
+    return underlying_ltp, df
 
 
-# ----------------- FULL SCANNER (same as before, but only runs if basic test passes) -----------------
+# ----------------- Analytics helpers -----------------
 
 def compute_pcr(df: pd.DataFrame):
     total_put_oi = df["pe_oi"].sum()
@@ -140,11 +155,9 @@ def find_oi_support_resistance(df: pd.DataFrame, underlying_ltp: float):
 
 
 def select_strikes(df: pd.DataFrame, underlying_ltp: float, count: int = 3):
-    df = df.copy()
-    df["abs_diff"] = (df["strike"] - underlying_ltp).abs()
     atm_strike = float(df.loc[df["abs_diff"].idxmin(), "strike"])
-
     window = df[df["strike"].between(atm_strike - 400, atm_strike + 400)].copy()
+
     window["ce_liq"] = window["ce_vol"] + window["ce_oi"]
     window["pe_liq"] = window["pe_vol"] + window["pe_oi"]
 
@@ -162,6 +175,7 @@ def select_strikes(df: pd.DataFrame, underlying_ltp: float, count: int = 3):
 def classify_buildup(ltp, prev_price, oi, prev_oi):
     if prev_price is None or prev_oi is None:
         return "Unknown"
+
     price_up = ltp > prev_price
     price_down = ltp < prev_price
     oi_up = oi > prev_oi
@@ -179,8 +193,6 @@ def classify_buildup(ltp, prev_price, oi, prev_oi):
 
 
 def get_atm_buildup(df: pd.DataFrame, underlying_ltp: float):
-    df = df.copy()
-    df["abs_diff"] = (df["strike"] - underlying_ltp).abs()
     row = df.loc[df["abs_diff"].idxmin()]
     ce_bu = classify_buildup(row["ce_ltp"], row["ce_prev_price"], row["ce_oi"], row["ce_prev_oi"])
     pe_bu = classify_buildup(row["pe_ltp"], row["pe_prev_price"], row["pe_oi"], row["pe_prev_oi"])
@@ -201,112 +213,73 @@ def generate_directional_view(sentiment, support, resistance, underlying_ltp):
     return "No clear edge; avoid fresh directional trade."
 
 
-# ----------------- STREAMLIT UI -----------------
+# ----------------- Streamlit UI -----------------
 
 st.title("Nifty Weekly Option Chain Scanner (DhanHQ)")
 st.caption("Uses DhanHQ Option Chain & Expiry APIs. Educational use only, not trading advice.[web:19]")
 
-debug_mode = st.checkbox("Run Dhan debug test first", value=True)
-
 if st.button("Scan Now"):
-    if debug_mode:
-        # Run minimal test first; if anything blows up, you will see
-        # which function and full stack trace.
-        test_dhan_calls()
-        st.success("Basic Dhan expiry_list() and option_chain() calls succeeded. Now you can turn off debug and re-run.")
-    else:
-        try:
-            client = get_dhan_client()
+    try:
+        client = get_dhan_client()
 
-            # First get expiry list and nearest expiry
-            resp = client.expiry_list(
-                under_security_id=NIFTY_UNDER_SECURITY_ID,
-                under_exchange_segment=client.INDEX,
-            )
-            expiries = resp.get("data") or []
-            expiry_dates = [isoparse(str(d)).date() for d in expiries]
-            today = datetime.now().date()
-            future = [d for d in expiry_dates if d >= today]
-            nearest_expiry = min(future).isoformat()
+        expiry = get_nearest_weekly_expiry(client)
+        if not expiry:
+            st.stop()
 
-            # Then full option chain
-            oc_resp = client.option_chain(
-                under_security_id=NIFTY_UNDER_SECURITY_ID,
-                under_exchange_segment=client.INDEX,
-                expiry=nearest_expiry,
-            )
-            data = oc_resp.get("data") or {}
-            underlying_ltp = float(data.get("last_price", 0.0))
-            oc_dict = data.get("oc") or {}
+        underlying_ltp, df = get_nifty_option_chain(client, expiry)
+        if df.empty:
+            st.error("No option chain rows received.")
+            st.stop()
 
-            rows = []
-            for strike_str, legs in oc_dict.items():
-                ce = legs.get("ce", {}) or {}
-                pe = legs.get("pe", {}) or {}
-                rows.append({
-                    "strike": float(strike_str),
-                    "ce_ltp": float(ce.get("last_price", 0.0) or 0.0),
-                    "ce_oi": int(ce.get("oi", 0) or 0),
-                    "ce_prev_price": float(ce.get("previous_close_price", 0.0) or 0.0),
-                    "ce_prev_oi": int(ce.get("previous_oi", 0) or 0),
-                    "ce_vol": int(ce.get("volume", 0) or 0),
-                    "pe_ltp": float(pe.get("last_price", 0.0) or 0.0),
-                    "pe_oi": int(pe.get("oi", 0) or 0),
-                    "pe_prev_price": float(pe.get("previous_close_price", 0.0) or 0.0),
-                    "pe_prev_oi": int(pe.get("previous_oi", 0) or 0),
-                    "pe_vol": int(pe.get("volume", 0) or 0),
-                })
+        pcr, sentiment = compute_pcr(df)
+        support, resistance = find_oi_support_resistance(df, underlying_ltp)
+        atm_strike, ce_candidates, pe_candidates = select_strikes(df, underlying_ltp)
+        atm_bu_strike, ce_bu, pe_bu = get_atm_buildup(df, underlying_ltp)
+        view = generate_directional_view(sentiment, support, resistance, underlying_ltp)
 
-            df = pd.DataFrame(rows)
-            if df.empty:
-                st.error("Option chain DataFrame is empty.")
-                st.stop()
+        # Overview
+        st.subheader("Overview")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Nifty LTP", f"{underlying_ltp:.2f}")
+        c2.metric("Nearest Weekly Expiry", expiry)
+        c3.metric("PCR", f"{pcr:.2f}" if pcr is not None else "N/A")
+        c4.metric("Sentiment", sentiment)
 
-            pcr, sentiment = compute_pcr(df)
-            support, resistance = find_oi_support_resistance(df, underlying_ltp)
-            atm_strike, ce_candidates, pe_candidates = select_strikes(df, underlying_ltp)
-            atm_bu_strike, ce_bu, pe_bu = get_atm_buildup(df, underlying_ltp)
-            view = generate_directional_view(sentiment, support, resistance, underlying_ltp)
+        # Support / Resistance
+        st.subheader("Support & Resistance (from OI)")
+        c1, c2 = st.columns(2)
+        if support:
+            c1.write(f"Support (Put OI): **{support[0]}** | OI: {support[1]}")
+        else:
+            c1.write("Support: N/A")
+        if resistance:
+            c2.write(f"Resistance (Call OI): **{resistance[0]}** | OI: {resistance[1]}")
+        else:
+            c2.write("Resistance: N/A")
 
-            # Overview
-            st.subheader("Overview")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Nifty LTP", f"{underlying_ltp:.2f}")
-            c2.metric("Nearest Weekly Expiry", nearest_expiry)
-            c3.metric("PCR", f"{pcr:.2f}" if pcr is not None else "N/A")
-            c4.metric("Sentiment", sentiment)
+        # Buildup
+        st.subheader("Buildup at ATM")
+        st.write(f"ATM Strike: **{atm_bu_strike}**")
+        st.write(f"Call (CE) buildup: {ce_bu}")
+        st.write(f"Put (PE) buildup: {pe_bu}")
 
-            # S/R
-            st.subheader("Support & Resistance (from OI)")
-            c1, c2 = st.columns(2)
-            if support:
-                c1.write(f"Support (Put OI): **{support[0]}** | OI: {support[1]}")
-            else:
-                c1.write("Support: N/A")
-            if resistance:
-                c2.write(f"Resistance (Call OI): **{resistance[0]}** | OI: {resistance[1]}")
-            else:
-                c2.write("Resistance: N/A")
+        # Strike selection
+        st.subheader("Strike Selection (Liquid near ATM)")
+        st.write(f"ATM Strike used for selection: **{atm_strike}**")
+        st.markdown("**Suggested Call (CE) strikes**")
+        st.dataframe(ce_candidates, use_container_width=True)
+        st.markdown("**Suggested Put (PE) strikes**")
+        st.dataframe(pe_candidates, use_container_width=True)
 
-            # Buildup
-            st.subheader("Buildup at ATM")
-            st.write(f"ATM Strike: **{atm_bu_strike}**")
-            st.write(f"Call (CE) buildup: {ce_bu}")
-            st.write(f"Put (PE) buildup: {pe_bu}")
+        # Interpretation
+        st.subheader("Scanner Interpretation")
+        st.write(view)
+        st.caption(
+            "Logic uses PCR, OI-based support/resistance, and ATM buildup from Dhan Option Chain snapshot.[web:19]"
+        )
 
-            # Strikes
-            st.subheader("Strike Selection (Liquid Near ATM)")
-            st.write(f"ATM Strike used for selection: **{atm_strike}**")
-            st.markdown("**Suggested Call (CE) strikes**")
-            st.dataframe(ce_candidates, use_container_width=True)
-            st.markdown("**Suggested Put (PE) strikes**")
-            st.dataframe(pe_candidates, use_container_width=True)
-
-            # Interpretation
-            st.subheader("Scanner Interpretation")
-            st.write(view)
-            st.caption("Logic uses PCR, OI S/R, and ATM buildup from Dhan snapshot. Not trading advice.[web:19]")
-
-        except Exception as e:
-            st.error("Unhandled exception in scanner:")
-            st.exception(e)
+    except Exception as e:
+        st.error("Unhandled exception:")
+        st.exception(e)
+else:
+    st.info("Click 'Scan Now' to fetch latest Nifty weekly option chain.")
