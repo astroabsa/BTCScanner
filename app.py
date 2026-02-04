@@ -60,21 +60,20 @@ def get_nearest_weekly_expiry(client) -> str | None:
 
     return min(future).isoformat()
 
-
 def get_nifty_option_chain(client, expiry_iso: str):
     """
     Calls option_chain() and converts to DataFrame.
-    Simplified response (per Dhan docs):[web:19][web:40]
+
+    With DhanHQ‑py the response you’re seeing is:
+
     {
       "status": "success",
+      "remarks": "",
       "data": {
-        "last_price": 24964.25,
-        "oc": {
-          "25000.000000": {
-             "ce": { "last_price": ..., "oi": ..., "previous_close_price": ..., "previous_oi": ..., "volume": ... },
-             "pe": { ... }
-          },
-          ...
+        "data": {          # <-- actual payload is nested here
+          "last_price": ...,
+          "oc": { "25000.000000": { "ce": {...}, "pe": {...} }, ... },
+          "status": "success"
         }
       }
     }
@@ -85,12 +84,14 @@ def get_nifty_option_chain(client, expiry_iso: str):
         expiry=expiry_iso,
     )
 
-    data = resp.get("data") or {}
-    underlying_ltp = float(data.get("last_price", 0.0))
+    outer = resp.get("data") or {}
+    inner = outer.get("data") or outer          # handle the extra nesting
 
-    oc_dict = data.get("oc") or {}
+    underlying_ltp = float(inner.get("last_price", 0.0))
+
+    oc_dict = inner.get("oc") or {}
     if not oc_dict:
-        st.error("Option chain 'oc' section is empty.")
+        st.error("Option chain 'oc' section is empty in Dhan response.")
         return underlying_ltp, pd.DataFrame()
 
     rows = []
@@ -120,6 +121,7 @@ def get_nifty_option_chain(client, expiry_iso: str):
     df = pd.DataFrame(rows).sort_values("strike").reset_index(drop=True)
     df["abs_diff"] = (df["strike"] - underlying_ltp).abs()
     return underlying_ltp, df
+
 
 
 # ----------------- Analytics helpers -----------------
