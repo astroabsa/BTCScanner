@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from dateutil.parser import isoparse
 from streamlit_autorefresh import st_autorefresh
 from zoneinfo import ZoneInfo  # IST timezone[web:86][web:91]
-import plotly.graph_objects as go  # for custom-colored OI charts[web:201][web:207]
+import plotly.graph_objects as go  # custom-colored charts[web:201][web:207]
 
 # ----------------- PAGE CONFIG -----------------
 
@@ -388,7 +388,7 @@ if auto_refresh:
 
 # ----------------- MAIN HEADER -----------------
 
-st.title("Nifty Option Chain Analyzer")
+st.title("Nifty Weekly Option Chain Scanner (DhanHQ)")
 ist_now = datetime.now(ZoneInfo("Asia/Kolkata"))
 st.write(f"Last updated (IST): **{ist_now.strftime('%d-%m-%Y %H:%M:%S')}**")
 
@@ -406,7 +406,7 @@ try:
         st.error("No option chain rows received.")
         st.stop()
 
-    # Maintain intraday snapshots (last 3) for ΔOI & ΔLTP
+    # Maintain intraday snapshots (last 3) for ΔOI & ΔLTP table
     if "snapshots" not in st.session_state:
         st.session_state["snapshots"] = []
     st.session_state["snapshots"].append(
@@ -540,16 +540,16 @@ try:
 
         fig_oi = go.Figure()
         fig_oi.add_bar(
-            name="Put OI",
-            x=oi_df["strike"],
-            y=oi_df["pe_oi"],
-            marker_color="green",
-        )
-        fig_oi.add_bar(
             name="Call OI",
             x=oi_df["strike"],
             y=oi_df["ce_oi"],
             marker_color="red",
+        )
+        fig_oi.add_bar(
+            name="Put OI",
+            x=oi_df["strike"],
+            y=oi_df["pe_oi"],
+            marker_color="green",
         )
         fig_oi.update_layout(
             barmode="group",
@@ -561,45 +561,37 @@ try:
         )
         st.plotly_chart(fig_oi, use_container_width=True, config={"displayModeBar": False})
 
-        # -------- ΔOI chart (change in OI vs previous snapshot) --------
-        st.subheader("Change in OI (Call & Put)")
+        # -------- ΔOI chart (day change vs previous close) --------
+        st.subheader("Day Change in OI (Call & Put)")
 
-        if prev_intra_df is not None and not prev_intra_df.empty:
-            prev_subset = prev_intra_df[["strike", "ce_oi", "pe_oi"]]
-            merged = oi_df.merge(
-                prev_subset,
-                on="strike",
-                how="left",
-                suffixes=("", "_prev"),
-            )
+        delta_df = df[df["strike"].between(atm_strike - 300, atm_strike + 300)].copy()
+        delta_df = delta_df[["strike", "ce_oi", "ce_prev_oi", "pe_oi", "pe_prev_oi"]]
 
-            merged["ce_ΔOI"] = merged["ce_oi"] - merged["ce_oi_prev"].fillna(0)
-            merged["pe_ΔOI"] = merged["pe_oi"] - merged["pe_oi_prev"].fillna(0)
+        delta_df["ce_ΔOI_day"] = delta_df["ce_oi"] - delta_df["ce_prev_oi"].fillna(0)
+        delta_df["pe_ΔOI_day"] = delta_df["pe_oi"] - delta_df["pe_prev_oi"].fillna(0)
 
-            fig_delta = go.Figure()
-            fig_delta.add_bar(
-                name="Put ΔOI",
-                x=merged["strike"],
-                y=merged["pe_ΔOI"],
-                marker_color="green",
-            )
-            fig_delta.add_bar(
-                name="Call ΔOI",
-                x=merged["strike"],
-                y=merged["ce_ΔOI"],
-                marker_color="red",
-            )
-            fig_delta.update_layout(
-                barmode="group",
-                title="Change in OI by strike (vs previous snapshot)",
-                xaxis_title="Strike",
-                yaxis_title="ΔOI",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                margin=dict(t=50, b=20),
-            )
-            st.plotly_chart(fig_delta, use_container_width=True, config={"displayModeBar": False})
-        else:
-            st.info("ΔOI chart appears after at least two refreshes (so we have a previous snapshot).")
+        fig_delta = go.Figure()
+        fig_delta.add_bar(
+            name="Call ΔOI (day)",
+            x=delta_df["strike"],
+            y=delta_df["ce_ΔOI_day"],
+            marker_color="red",
+        )
+        fig_delta.add_bar(
+            name="Put ΔOI (day)",
+            x=delta_df["strike"],
+            y=delta_df["pe_ΔOI_day"],
+            marker_color="green",
+        )
+        fig_delta.update_layout(
+            barmode="group",
+            title="Change in OI by strike (since previous close)",
+            xaxis_title="Strike",
+            yaxis_title="ΔOI (day)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(t=50, b=20),
+        )
+        st.plotly_chart(fig_delta, use_container_width=True, config={"displayModeBar": False})
 
     # ===== TAB 3: FULL OPTION CHAIN (ATM ±2 only) =====
     with tab_chain:
