@@ -4,8 +4,8 @@ from dhanhq import dhanhq
 from datetime import datetime, timedelta
 from dateutil.parser import isoparse
 from streamlit_autorefresh import st_autorefresh
-from zoneinfo import ZoneInfo  # IST timezone[web:86][web:91]
-import plotly.graph_objects as go  # custom-colored charts[web:201]
+from zoneinfo import ZoneInfo  # IST timezone
+import plotly.graph_objects as go  # custom-colored charts
 
 # ----------------- PAGE CONFIG -----------------
 
@@ -15,7 +15,6 @@ st.set_page_config(
 )
 
 # ----------------- CONSTANTS -----------------
-# From Dhan Option Chain docs (Nifty index underlying and index segment).[web:19][web:40]
 NIFTY_UNDER_SECURITY_ID = 13
 UNDER_EXCHANGE_SEGMENT = "IDX_I"   # index options segment code
 
@@ -34,15 +33,7 @@ def get_dhan_client():
 
 def get_nearest_weekly_expiry(client) -> str | None:
     """
-    expiry_list() response shape:[web:19][web:40]
-    {
-      "status": "success",
-      "remarks": "",
-      "data": {
-        "data": ["YYYY-MM-DD", ...],
-        "status": "success"
-      }
-    }
+    Uses Dhan expiry_list() to get upcoming expiries and returns nearest >= today.
     """
     resp = client.expiry_list(
         under_security_id=NIFTY_UNDER_SECURITY_ID,
@@ -67,19 +58,7 @@ def get_nearest_weekly_expiry(client) -> str | None:
 
 def get_nifty_option_chain(client, expiry_iso: str):
     """
-    option_chain() response is double-nested in data:[web:19][web:40]
-
-    {
-      "status": "success",
-      "remarks": "",
-      "data": {
-        "data": {
-          "last_price": ...,
-          "oc": { "25000.000000": { "ce": {...}, "pe": {...} }, ... },
-          "status": "success"
-        }
-      }
-    }
+    Calls option_chain() and flattens CE/PE legs into a DataFrame.
     """
     resp = client.option_chain(
         under_security_id=NIFTY_UNDER_SECURITY_ID,
@@ -132,8 +111,7 @@ def get_nifty_option_chain(client, expiry_iso: str):
 
 def get_5min_trend_and_vwap(client):
     """
-    Uses intraday_minute_data with interval=5 to compute EMA20 + VWAP trend
-    for Nifty index over today's session.[web:154][web:157]
+    Uses intraday_minute_data with interval=5 to compute EMA20 + VWAP trend.
     """
     today = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
     from_date = (datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -176,7 +154,7 @@ def get_5min_trend_and_vwap(client):
     if last_close > last_ema and last_close > last_vwap and last_ema > prev_ema:
         trend = "Uptrend"
     elif last_close < last_ema and last_close < last_vwap and last_ema < prev_ema:
-        trend = "Downtrend"
+            trend = "Downtrend"
     else:
         trend = "Sideways"
 
@@ -278,7 +256,7 @@ def classify_buildup(ltp, prev_price, oi, prev_oi):
 
 def get_atm_buildup(df: pd.DataFrame, underlying_ltp: float):
     """
-    Daily buildup vs previous close (informational).
+    Daily buildup vs previous close.
     """
     row = df.loc[df["abs_diff"].idxmin()]
     ce_bu = classify_buildup(row["ce_ltp"], row["ce_prev_price"], row["ce_oi"], row["ce_prev_oi"])
@@ -372,6 +350,12 @@ def compute_scalper_bias(trend: str, local_sentiment: str,
     return "No Trade"
 
 
+# CSV conversion helper for downloads.[web:255][web:256]
+@st.cache_data
+def convert_df_to_csv(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8")
+
+
 # ----------------- SIDEBAR (controls) -----------------
 
 with st.sidebar:
@@ -380,7 +364,7 @@ with st.sidebar:
     refresh_secs = st.slider("Refresh interval (seconds)", 30, 300, 120, 30)
     show_full_chain = st.checkbox("Show full option chain table", value=True)
     st.markdown("---")
-    st.caption("Built on DhanHQ Option Chain & Expiry APIs.[web:19]")
+    st.caption("Built on DhanHQ Option Chain & Expiry APIs.")
 
 if auto_refresh:
     st_autorefresh(interval=refresh_secs * 1000, key="nifty_scan_refresh")
@@ -415,10 +399,8 @@ try:
     if len(st.session_state["snapshots"]) > 3:
         st.session_state["snapshots"].pop(0)
 
-    # First snapshot of this session: used as baseline for intraday ΔOI chart.[web:245][web:249]
     if "base_snapshot" not in st.session_state:
         st.session_state["base_snapshot"] = st.session_state["snapshots"][0]
-
     base_snapshot_df = st.session_state["base_snapshot"]
 
     prev_intra_df = None
@@ -428,6 +410,11 @@ try:
             if len(st.session_state["snapshots"]) == 3
             else st.session_state["snapshots"][-2]
         )
+
+    # Real-time price delta using session_state
+    prev_ltp = st.session_state.get("prev_ltp")
+    ltp_delta = None if prev_ltp is None else underlying_ltp - prev_ltp
+    st.session_state["prev_ltp"] = underlying_ltp
 
     # Core analytics
     pcr, sentiment = compute_pcr(df)
@@ -446,6 +433,17 @@ try:
     scalper_bias = compute_scalper_bias(trend_5m, local_sentiment,
                                         ce_bu_intra, pe_bu_intra)
 
+    # Alert when scalper bias changes (toast notification).[web:261]
+    last_bias = st.session_state.get("last_scalper_bias")
+    if last_bias is not None and last_bias != scalper_bias:
+        if scalper_bias == "Long CE":
+            st.toast("Scalper Bias changed to Long CE", icon="🟢")
+        elif scalper_bias == "Long PE":
+            st.toast("Scalper Bias changed to Long PE", icon="🔴")
+        else:
+            st.toast("Scalper Bias changed to No Trade", icon="⚪")
+    st.session_state["last_scalper_bias"] = scalper_bias
+
     # ----------------- TABS LAYOUT -----------------
     tab_summary, tab_strikes, tab_chain = st.tabs(
         ["Summary", "Strikes & View", "Full Option Chain"]
@@ -454,7 +452,11 @@ try:
     # ===== TAB 1: SUMMARY =====
     with tab_summary:
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Nifty LTP", f"{underlying_ltp:.2f}")
+        k1.metric(
+            "Nifty LTP",
+            f"{underlying_ltp:.2f}",
+            None if ltp_delta is None else f"{ltp_delta:+.2f}"
+        )
         k2.metric("Nearest Expiry", expiry)
         k3.metric("5m Trend", trend_5m)
         k4.metric("Scalper Bias", scalper_bias)
@@ -513,10 +515,6 @@ try:
         else:
             st.info("No aligned high-probability scalp right now; better to wait.")
 
-        st.caption(
-            "Bias combines 5m trend, local PCR, and intraday ATM CE/PE buildup from Dhan data.[web:19][web:154][web:157]"
-        )
-
     # ===== TAB 2: STRIKES & VIEW =====
     with tab_strikes:
         st.subheader("Liquid Strikes Near ATM")
@@ -538,7 +536,7 @@ try:
                 height=230,
             )
 
-        # -------- Combined Call/Put OI chart --------
+        # Combined Call/Put OI chart
         st.subheader("OI Snapshot Around ATM")
 
         around = df[df["strike"].between(atm_strike - 300, atm_strike + 300)].copy()
@@ -567,7 +565,7 @@ try:
         )
         st.plotly_chart(fig_oi, use_container_width=True, config={"displayModeBar": False})
 
-        # -------- Intraday ΔOI chart (vs first snapshot of this session) --------
+        # Intraday ΔOI chart (vs first snapshot of this session)
         st.subheader("Intraday Change in OI (from first snapshot)")
 
         if base_snapshot_df is not None and not base_snapshot_df.empty:
@@ -611,6 +609,7 @@ try:
     with tab_chain:
         if show_full_chain:
             st.subheader("Full Option Chain (ATM ±2 Strikes)")
+
             display_cols = [
                 "strike",
                 "ce_ltp", "ce_oi", "ce_vol",
@@ -631,6 +630,15 @@ try:
                 use_container_width=True,
                 height=260,
                 hide_index=True,
+            )
+
+            # Export option chain window to CSV
+            csv_data = convert_df_to_csv(df_window[display_cols])
+            st.download_button(
+                label="Download ATM ±2 option chain as CSV",
+                data=csv_data,
+                file_name=f"nifty_option_chain_atm_window_{expiry}.csv",
+                mime="text/csv",
             )
         else:
             st.info("Enable 'Show full option chain table' in sidebar to view this section.")
