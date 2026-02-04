@@ -13,7 +13,7 @@ def get_dhan_client():
     return dhanhq(client_id, access_token)
 
 def get_nearest_weekly_expiry(client):
-    under_sec_id = st.secrets.get("NIFTY_UNDER_SECURITY_ID", "13")
+    under_sec_id = 13
     resp = client.expiry_list(
         under_security_id=under_sec_id,
         under_exchange_segment=client.INDEX,
