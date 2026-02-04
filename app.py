@@ -388,7 +388,7 @@ if auto_refresh:
 
 # ----------------- MAIN HEADER -----------------
 
-st.title("Nifty Weekly Option Chain Scanner (DhanHQ)")
+st.title("Nifty Option Chain Analyzer")
 ist_now = datetime.now(ZoneInfo("Asia/Kolkata"))
 st.write(f"Last updated (IST): **{ist_now.strftime('%d-%m-%Y %H:%M:%S')}**")
 
@@ -540,16 +540,16 @@ try:
 
         fig_oi = go.Figure()
         fig_oi.add_bar(
-            name="Call OI",
-            x=oi_df["strike"],
-            y=oi_df["ce_oi"],
-            marker_color="red",
-        )
-        fig_oi.add_bar(
             name="Put OI",
             x=oi_df["strike"],
             y=oi_df["pe_oi"],
             marker_color="green",
+        )
+        fig_oi.add_bar(
+            name="Call OI",
+            x=oi_df["strike"],
+            y=oi_df["ce_oi"],
+            marker_color="red",
         )
         fig_oi.update_layout(
             barmode="group",
@@ -578,16 +578,16 @@ try:
 
             fig_delta = go.Figure()
             fig_delta.add_bar(
-                name="Call ΔOI",
-                x=merged["strike"],
-                y=merged["ce_ΔOI"],
-                marker_color="red",
-            )
-            fig_delta.add_bar(
                 name="Put ΔOI",
                 x=merged["strike"],
                 y=merged["pe_ΔOI"],
                 marker_color="green",
+            )
+            fig_delta.add_bar(
+                name="Call ΔOI",
+                x=merged["strike"],
+                y=merged["ce_ΔOI"],
+                marker_color="red",
             )
             fig_delta.update_layout(
                 barmode="group",
