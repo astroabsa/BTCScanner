@@ -3,6 +3,9 @@ import pandas as pd
 from dhanhq import dhanhq
 from datetime import datetime
 from dateutil.parser import isoparse
+from streamlit_autorefresh import st_autorefresh
+
+# ----------------- PAGE CONFIG -----------------
 
 st.set_page_config(
     page_title="Nifty Weekly Option Chain Scanner (DhanHQ)",
@@ -10,9 +13,9 @@ st.set_page_config(
 )
 
 # ----------------- CONSTANTS -----------------
-# From Dhan Option Chain docs: Nifty index underlying + index segment.[web:19][web:40]
+# From Dhan Option Chain docs (Nifty index underlying).[web:19]
 NIFTY_UNDER_SECURITY_ID = 13
-UNDER_EXCHANGE_SEGMENT = "IDX_I"
+UNDER_EXCHANGE_SEGMENT = "IDX_I"   # index options segment code
 
 
 # ----------------- Dhan helpers -----------------
@@ -29,16 +32,16 @@ def get_dhan_client():
 
 def get_nearest_weekly_expiry(client) -> str | None:
     """
-    Uses expiry_list() and picks nearest future expiry.
-    Response shape:
+    expiry_list() response shape you showed:
+
     {
       "status": "success",
       "remarks": "",
       "data": {
-          "data": ["YYYY-MM-DD", ...],
-          "status": "success"
+        "data": ["YYYY-MM-DD", ...],
+        "status": "success"
       }
-    }[web:19][web:40]
+    }
     """
     resp = client.expiry_list(
         under_security_id=NIFTY_UNDER_SECURITY_ID,
@@ -58,19 +61,18 @@ def get_nearest_weekly_expiry(client) -> str | None:
         st.error("No future expiry dates found.")
         return None
 
-    return min(future).isoformat()
+    return min(future).isoformat()   # "YYYY-MM-DD"
+
 
 def get_nifty_option_chain(client, expiry_iso: str):
     """
-    Calls option_chain() and converts to DataFrame.
-
-    With DhanHQ‑py the response you’re seeing is:
+    option_chain() response is similarly double-nested in data:[web:19]
 
     {
       "status": "success",
       "remarks": "",
       "data": {
-        "data": {          # <-- actual payload is nested here
+        "data": {
           "last_price": ...,
           "oc": { "25000.000000": { "ce": {...}, "pe": {...} }, ... },
           "status": "success"
@@ -85,7 +87,7 @@ def get_nifty_option_chain(client, expiry_iso: str):
     )
 
     outer = resp.get("data") or {}
-    inner = outer.get("data") or outer          # handle the extra nesting
+    inner = outer.get("data") or outer
 
     underlying_ltp = float(inner.get("last_price", 0.0))
 
@@ -106,11 +108,13 @@ def get_nifty_option_chain(client, expiry_iso: str):
 
         rows.append({
             "strike": strike,
+            # CE
             "ce_ltp": float(ce.get("last_price", 0.0) or 0.0),
             "ce_oi": int(ce.get("oi", 0) or 0),
             "ce_prev_price": float(ce.get("previous_close_price", 0.0) or 0.0),
             "ce_prev_oi": int(ce.get("previous_oi", 0) or 0),
             "ce_vol": int(ce.get("volume", 0) or 0),
+            # PE
             "pe_ltp": float(pe.get("last_price", 0.0) or 0.0),
             "pe_oi": int(pe.get("oi", 0) or 0),
             "pe_prev_price": float(pe.get("previous_close_price", 0.0) or 0.0),
@@ -121,7 +125,6 @@ def get_nifty_option_chain(client, expiry_iso: str):
     df = pd.DataFrame(rows).sort_values("strike").reset_index(drop=True)
     df["abs_diff"] = (df["strike"] - underlying_ltp).abs()
     return underlying_ltp, df
-
 
 
 # ----------------- Analytics helpers -----------------
@@ -215,73 +218,78 @@ def generate_directional_view(sentiment, support, resistance, underlying_ltp):
     return "No clear edge; avoid fresh directional trade."
 
 
-# ----------------- Streamlit UI -----------------
+# ----------------- UI + AUTO REFRESH -----------------
 
 st.title("Nifty Weekly Option Chain Scanner (DhanHQ)")
 st.caption("Uses DhanHQ Option Chain & Expiry APIs. Educational use only, not trading advice.[web:19]")
 
-if st.button("Scan Now"):
-    try:
-        client = get_dhan_client()
+# Auto-refresh every 2 minutes (120000 ms)
+refresh_count = st_autorefresh(interval=2 * 60 * 1000, key="nifty_scan_refresh")
+st.write(f"Auto-refresh count: {refresh_count}")
 
-        expiry = get_nearest_weekly_expiry(client)
-        if not expiry:
-            st.stop()
+st.write(f"Last updated at: {datetime.now().strftime('%H:%M:%S')}")
 
-        underlying_ltp, df = get_nifty_option_chain(client, expiry)
-        if df.empty:
-            st.error("No option chain rows received.")
-            st.stop()
+try:
+    client = get_dhan_client()
 
-        pcr, sentiment = compute_pcr(df)
-        support, resistance = find_oi_support_resistance(df, underlying_ltp)
-        atm_strike, ce_candidates, pe_candidates = select_strikes(df, underlying_ltp)
-        atm_bu_strike, ce_bu, pe_bu = get_atm_buildup(df, underlying_ltp)
-        view = generate_directional_view(sentiment, support, resistance, underlying_ltp)
+    expiry = get_nearest_weekly_expiry(client)
+    if not expiry:
+        st.stop()
 
-        # Overview
-        st.subheader("Overview")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Nifty LTP", f"{underlying_ltp:.2f}")
-        c2.metric("Nearest Weekly Expiry", expiry)
-        c3.metric("PCR", f"{pcr:.2f}" if pcr is not None else "N/A")
-        c4.metric("Sentiment", sentiment)
+    underlying_ltp, df = get_nifty_option_chain(client, expiry)
+    if df.empty:
+        st.error("No option chain rows received.")
+        st.stop()
 
-        # Support / Resistance
-        st.subheader("Support & Resistance (from OI)")
-        c1, c2 = st.columns(2)
-        if support:
-            c1.write(f"Support (Put OI): **{support[0]}** | OI: {support[1]}")
-        else:
-            c1.write("Support: N/A")
-        if resistance:
-            c2.write(f"Resistance (Call OI): **{resistance[0]}** | OI: {resistance[1]}")
-        else:
-            c2.write("Resistance: N/A")
+    pcr, sentiment = compute_pcr(df)
+    support, resistance = find_oi_support_resistance(df, underlying_ltp)
+    atm_strike, ce_candidates, pe_candidates = select_strikes(df, underlying_ltp)
+    atm_bu_strike, ce_bu, pe_bu = get_atm_buildup(df, underlying_ltp)
+    view = generate_directional_view(sentiment, support, resistance, underlying_ltp)
 
-        # Buildup
-        st.subheader("Buildup at ATM")
-        st.write(f"ATM Strike: **{atm_bu_strike}**")
-        st.write(f"Call (CE) buildup: {ce_bu}")
-        st.write(f"Put (PE) buildup: {pe_bu}")
+    # -------- Overview --------
+    st.subheader("Overview")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Nifty LTP", f"{underlying_ltp:.2f}")
+    c2.metric("Nearest Weekly Expiry", expiry)
+    c3.metric("PCR", f"{pcr:.2f}" if pcr is not None else "N/A")
+    c4.metric("Sentiment", sentiment)
 
-        # Strike selection
-        st.subheader("Strike Selection (Liquid near ATM)")
-        st.write(f"ATM Strike used for selection: **{atm_strike}**")
-        st.markdown("**Suggested Call (CE) strikes**")
-        st.dataframe(ce_candidates, use_container_width=True)
-        st.markdown("**Suggested Put (PE) strikes**")
-        st.dataframe(pe_candidates, use_container_width=True)
+    # -------- Support / Resistance --------
+    st.subheader("Support & Resistance (from OI)")
+    col1, col2 = st.columns(2)
+    if support:
+        col1.write(f"Support (Put OI): **{support[0]}** | OI: {support[1]}")
+    else:
+        col1.write("Support: N/A")
+    if resistance:
+        col2.write(f"Resistance (Call OI): **{resistance[0]}** | OI: {resistance[1]}")
+    else:
+        col2.write("Resistance: N/A")
 
-        # Interpretation
-        st.subheader("Scanner Interpretation")
-        st.write(view)
-        st.caption(
-            "Logic uses PCR, OI-based support/resistance, and ATM buildup from Dhan Option Chain snapshot.[web:19]"
-        )
+    # -------- Buildup --------
+    st.subheader("Buildup at ATM")
+    st.write(f"ATM Strike: **{atm_bu_strike}**")
+    st.write(f"Call (CE) buildup: {ce_bu}")
+    st.write(f"Put (PE) buildup: {pe_bu}")
 
-    except Exception as e:
-        st.error("Unhandled exception:")
-        st.exception(e)
-else:
-    st.info("Click 'Scan Now' to fetch latest Nifty weekly option chain.")
+    # -------- Strike Selection --------
+    st.subheader("Strike Selection (Liquid near ATM)")
+    st.write(f"ATM Strike used for selection: **{atm_strike}**")
+
+    st.markdown("**Suggested Call (CE) strikes**")
+    st.dataframe(ce_candidates, use_container_width=True)
+
+    st.markdown("**Suggested Put (PE) strikes**")
+    st.dataframe(pe_candidates, use_container_width=True)
+
+    # -------- Interpretation --------
+    st.subheader("Scanner Interpretation")
+    st.write(view)
+    st.caption(
+        "Logic uses PCR, OI-based support/resistance, and ATM buildup from Dhan Option Chain snapshot.[web:19]"
+    )
+
+except Exception as e:
+    st.error("Unhandled exception:")
+    st.exception(e)
