@@ -332,28 +332,36 @@ try:
 
     # ===== TAB 3: FULL OPTION CHAIN =====
     with tab_chain:
-        if show_full_chain:
-            st.subheader("Full Option Chain (Current Expiry)")
+    if show_full_chain:
+        st.subheader("Full Option Chain (Current Expiry)")
 
-            display_cols = [
-                "strike",
-                "ce_ltp", "ce_oi", "ce_vol",
-                "pe_ltp", "pe_oi", "pe_vol",
-            ]
+        display_cols = [
+            "strike",
+            "ce_ltp", "ce_oi", "ce_vol",
+            "pe_ltp", "pe_oi", "pe_vol",
+        ]
 
-            # Remove rows where all option values are zero (no trading interest).[web:121]
-            numeric_cols = ["ce_ltp", "ce_oi", "ce_vol", "pe_ltp", "pe_oi", "pe_vol"]
-            df_nonzero = df.copy()
-            df_nonzero = df_nonzero[~(df_nonzero[numeric_cols] == 0).all(axis=1)]
+        # 1) Find ATM index on the full chain
+        df_chain = df.sort_values("strike").reset_index(drop=True)
+        atm_idx = df_chain["abs_diff"].idxmin()
 
-            st.dataframe(
-                df_nonzero[display_cols],
-                use_container_width=True,
-                height=450,
-                hide_index=True,
-            )
-        else:
-            st.info("Enable 'Show full option chain table' in sidebar to view complete chain.")
+        # 2) Take ATM ± 2 strikes (ATM + 2 ITM + 2 OTM)
+        start = max(atm_idx - 2, 0)
+        end = min(atm_idx + 2, len(df_chain) - 1)
+        df_window = df_chain.iloc[start:end + 1].copy()
+
+        # 3) Remove rows where all option values are zero (within this window)[web:121]
+        numeric_cols = ["ce_ltp", "ce_oi", "ce_vol", "pe_ltp", "pe_oi", "pe_vol"]
+        df_window = df_window[~(df_window[numeric_cols] == 0).all(axis=1)]
+
+        st.dataframe(
+            df_window[display_cols],
+            use_container_width=True,
+            height=300,
+            hide_index=True,
+        )
+    else:
+        st.info("Enable 'Show full option chain table' in sidebar to view this section.")
 
 except Exception as e:
     st.error("Unhandled exception:")
