@@ -135,7 +135,6 @@ def get_5min_trend_and_vwap(client):
     for Nifty index over today's session.[page:1][web:154][web:157]
     """
     today = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
-    # For safety, from_date = today-1, to_date = today
     from_date = (datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=1)).strftime("%Y-%m-%d")
 
     try:
@@ -375,15 +374,13 @@ def compute_scalper_bias(trend: str, local_sentiment: str,
 # ----------------- SIDEBAR (controls) -----------------
 
 with st.sidebar:
-    st.title("Settings")
-    st.markdown("Configure **refresh** and **display** options here.")
+    st.title("Controls")
     auto_refresh = st.checkbox("Auto refresh", value=True)
     refresh_secs = st.slider("Refresh interval (seconds)", 30, 300, 120, 30)
     show_full_chain = st.checkbox("Show full option chain table", value=True)
     st.markdown("---")
     st.caption("Built on DhanHQ Option Chain & Expiry APIs.[web:19]")
 
-# Trigger auto-refresh if enabled
 if auto_refresh:
     st_autorefresh(interval=refresh_secs * 1000, key="nifty_scan_refresh")
 
@@ -394,7 +391,7 @@ st.title("Nifty Weekly Option Chain Scanner (DhanHQ)")
 ist_now = datetime.now(ZoneInfo("Asia/Kolkata"))
 st.write(f"Last updated (IST): **{ist_now.strftime('%d-%m-%Y %H:%M:%S')}**")
 
-# ----------------- DATA FETCH -----------------
+# ----------------- DATA FETCH + CALC -----------------
 
 try:
     client = get_dhan_client()
@@ -419,11 +416,11 @@ try:
 
     prev_intra_df = None
     if len(st.session_state["snapshots"]) >= 2:
-        # If 3 snapshots, compare oldest vs latest; else previous vs latest
-        if len(st.session_state["snapshots"]) == 3:
-            prev_intra_df = st.session_state["snapshots"][0]
-        else:
-            prev_intra_df = st.session_state["snapshots"][-2]
+        prev_intra_df = (
+            st.session_state["snapshots"][0]
+            if len(st.session_state["snapshots"]) == 3
+            else st.session_state["snapshots"][-2]
+        )
 
     # Core analytics
     pcr, sentiment = compute_pcr(df)
@@ -431,18 +428,14 @@ try:
     atm_strike, ce_candidates, pe_candidates = select_strikes(df, underlying_ltp)
     atm_bu_strike, ce_bu_daily, pe_bu_daily = get_atm_buildup(df, underlying_ltp)
 
-    # 5-min trend (VWAP + EMA20)
     trend_5m, vwap_5m, ema20_5m = get_5min_trend_and_vwap(client)
 
-    # Local PCR around ATM (ATM ±2)
     atm_index = df["abs_diff"].idxmin()
     local_pcr_val, local_sentiment, _ = local_pcr_around_atm(df, atm_index, window=2)
 
-    # Intraday buildup at ATM and Δ table
     ce_bu_intra, pe_bu_intra = get_intraday_buildup_atm(df, prev_intra_df)
     intra_delta_table = get_intraday_delta_table(df, prev_intra_df)
 
-    # Scalper Bias
     scalper_bias = compute_scalper_bias(trend_5m, local_sentiment,
                                         ce_bu_intra, pe_bu_intra)
 
@@ -453,58 +446,78 @@ try:
 
     # ===== TAB 1: SUMMARY =====
     with tab_summary:
-        # Row 1 metrics
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Nifty LTP", f"{underlying_ltp:.2f}")
-        m2.metric("Nearest Weekly Expiry", expiry)
-        m3.metric("PCR", f"{pcr:.2f}" if pcr is not None else "N/A")
-        m4.metric("Sentiment", sentiment)
+        # Top KPI row – clean cards[web:94][web:194]
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Nifty LTP", f"{underlying_ltp:.2f}")
+        k2.metric("Nearest Expiry", expiry)
+        k3.metric("5m Trend", trend_5m)
+        k4.metric("Scalper Bias", scalper_bias)
 
-        # Row 2 metrics (scalper focused)
-        n1, n2, n3 = st.columns(3)
-        n1.metric("5m Trend (VWAP+EMA20)", trend_5m)
-        n2.metric("Local PCR (ATM±2)", f"{local_pcr_val:.2f}" if local_pcr_val is not None else "N/A")
-        n3.metric("Scalper Bias", scalper_bias)
+        # Secondary metrics
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Overall PCR", f"{pcr:.2f}" if pcr is not None else "N/A")
+        s2.metric("Local PCR (ATM±2)", f"{local_pcr_val:.2f}" if local_pcr_val is not None else "N/A")
+        s3.metric("Sentiment", local_sentiment)
 
-        c1, c2 = st.columns(2)
+        # Two main cards
+        left, right = st.columns(2)
 
-        with c1:
-            st.subheader("Support & Resistance")
-            if support:
-                st.write(f"Support (Put OI): **{support[0]}**  | OI: {support[1]}")
-            else:
-                st.write("Support: N/A")
-            if resistance:
-                st.write(f"Resistance (Call OI): **{resistance[0]}**  | OI: {resistance[1]}")
-            else:
-                st.write("Resistance: N/A")
-            if vwap_5m is not None and ema20_5m is not None:
-                st.write(f"5m VWAP: **{vwap_5m:.2f}**, EMA20: **{ema20_5m:.2f}**")
+        with left:
+            with st.container(border=True):
+                st.subheader("Support & Resistance")
+                col_a, col_b = st.columns(2)
+                if support:
+                    col_a.metric("Support strike", f"{support[0]:.0f}")
+                    col_b.metric("Put OI at support", f"{support[1]}")
+                else:
+                    st.write("No clear support from Put OI.")
+                if resistance:
+                    col_a, col_b = st.columns(2)
+                    col_a.metric("Resistance strike", f"{resistance[0]:.0f}")
+                    col_b.metric("Call OI at resistance", f"{resistance[1]}")
+                else:
+                    st.write("No clear resistance from Call OI.")
+                if vwap_5m is not None and ema20_5m is not None:
+                    st.caption(f"5m VWAP: {vwap_5m:.2f}   |   EMA20: {ema20_5m:.2f}")
 
-        with c2:
-            st.subheader("ATM Buildup")
-            st.write(f"ATM Strike: **{atm_bu_strike}**")
-            st.write(f"Daily vs prev close – CE: {ce_bu_daily}, PE: {pe_bu_daily}")
-            st.write(f"Intraday vs last snapshot – CE: {ce_bu_intra}, PE: {pe_bu_intra}")
-            if intra_delta_table is not None:
-                st.subheader("Intraday ΔOI & ΔLTP (ATM ±1)")
-                st.dataframe(
-                    intra_delta_table,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=160,
-                )
+        with right:
+            with st.container(border=True):
+                st.subheader("ATM Buildup & Intraday Flow")
+                st.write(f"ATM strike: **{atm_bu_strike:.0f}**")
+                st.write(f"Daily vs prev close – CE: {ce_bu_daily}, PE: {pe_bu_daily}")
+                st.write(f"Intraday vs last snapshot – CE: {ce_bu_intra}, PE: {pe_bu_intra}")
+                if intra_delta_table is not None:
+                    st.caption("ΔOI & ΔLTP (ATM−1, ATM, ATM+1)")
+                    st.dataframe(
+                        intra_delta_table,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=150,
+                    )
 
+        # Interpretation banner
         st.subheader("Scanner Interpretation")
-        st.write(view := scalper_bias if scalper_bias != "No Trade" else "No clear high-probability scalp; wait.")
+        if scalper_bias == "Long CE":
+            st.success(
+                "Scalper Bias: Long CE – trend up, local PCR bullish, "
+                "and intraday CE buildup supports longs."
+            )
+        elif scalper_bias == "Long PE":
+            st.error(
+                "Scalper Bias: Long PE – trend down, local PCR bearish, "
+                "and intraday PE buildup supports shorts."
+            )
+        else:
+            st.info("No aligned high-probability scalp right now; better to wait.")
+
         st.caption(
-            "Scalper Bias combines 5m trend, local PCR, and intraday ATM CE/PE buildup from Dhan data.[web:19][web:154][web:157]"
+            "Bias combines 5m trend, local PCR, and intraday ATM CE/PE buildup from Dhan data.[web:19][web:154][web:157]"
         )
 
     # ===== TAB 2: STRIKES & VIEW =====
     with tab_strikes:
         st.subheader("Liquid Strikes Near ATM")
-        st.write(f"ATM Strike used for selection: **{atm_strike}**")
+        st.write(f"ATM strike used for selection: **{atm_strike:.0f}**")
 
         left, right = st.columns(2)
         with left:
@@ -512,17 +525,17 @@ try:
             st.dataframe(
                 ce_candidates.set_index("strike"),
                 use_container_width=True,
-                height=250,
+                height=230,
             )
         with right:
             st.markdown("**Suggested Put (PE) strikes**")
             st.dataframe(
                 pe_candidates.set_index("strike"),
                 use_container_width=True,
-                height=250,
+                height=230,
             )
 
-        st.subheader("OI Snapshot Around ATM (Compact View)")
+        st.subheader("OI Snapshot Around ATM")
         around = df[df["strike"].between(atm_strike - 300, atm_strike + 300)].copy()
         oi_view = around[["strike", "ce_oi", "pe_oi"]].set_index("strike")
         c1, c2 = st.columns(2)
@@ -537,14 +550,12 @@ try:
     with tab_chain:
         if show_full_chain:
             st.subheader("Full Option Chain (ATM ±2 Strikes)")
-
             display_cols = [
                 "strike",
                 "ce_ltp", "ce_oi", "ce_vol",
                 "pe_ltp", "pe_oi", "pe_vol",
             ]
 
-            # Restrict to ATM ±2 strikes, then drop all-zero rows
             df_chain = df.sort_values("strike").reset_index(drop=True)
             atm_idx_chain = df_chain["abs_diff"].idxmin()
             start = max(atm_idx_chain - 2, 0)
@@ -557,7 +568,7 @@ try:
             st.dataframe(
                 df_window[display_cols],
                 use_container_width=True,
-                height=300,
+                height=260,
                 hide_index=True,
             )
         else:
