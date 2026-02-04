@@ -3,3 +3,4 @@ dhanhq
 pandas
 python-dateutil
 streamlit-autorefresh
+plotly
