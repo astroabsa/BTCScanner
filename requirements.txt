@@ -2,3 +2,4 @@ streamlit
 dhanhq
 pandas
 python-dateutil
+streamlit-autorefresh
