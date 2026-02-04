@@ -617,7 +617,7 @@ try:
             end = min(atm_idx_chain + 2, len(df_chain) - 1)
             df_window = df_chain.iloc[start:end + 1].copy()
 
-            numeric_cols = ["ce_ltp", "ce_oi", "ce_vol", "pe_ltp", "pe_oi", "PE_Vol"]
+            numeric_cols = ["ce_ltp", "ce_oi", "ce_vol", "pe_ltp", "pe_oi", "pe_vol"]
             df_window = df_window[~(df_window[numeric_cols] == 0).all(axis=1)]
 
             st.dataframe(
