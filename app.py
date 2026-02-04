@@ -4,6 +4,7 @@ from dhanhq import dhanhq
 from datetime import datetime
 from dateutil.parser import isoparse
 from streamlit_autorefresh import st_autorefresh
+from zoneinfo import ZoneInfo  # for IST timezone handling[web:86][web:91]
 
 # ----------------- PAGE CONFIG -----------------
 
@@ -13,7 +14,7 @@ st.set_page_config(
 )
 
 # ----------------- CONSTANTS -----------------
-# From Dhan Option Chain docs (Nifty index underlying).[web:19]
+# From Dhan Option Chain docs (Nifty index underlying and index segment).[web:19][web:40]
 NIFTY_UNDER_SECURITY_ID = 13
 UNDER_EXCHANGE_SEGMENT = "IDX_I"   # index options segment code
 
@@ -32,7 +33,7 @@ def get_dhan_client():
 
 def get_nearest_weekly_expiry(client) -> str | None:
     """
-    expiry_list() response shape you showed:
+    expiry_list() response shape:
 
     {
       "status": "success",
@@ -41,7 +42,7 @@ def get_nearest_weekly_expiry(client) -> str | None:
         "data": ["YYYY-MM-DD", ...],
         "status": "success"
       }
-    }
+    }[web:19][web:40]
     """
     resp = client.expiry_list(
         under_security_id=NIFTY_UNDER_SECURITY_ID,
@@ -55,7 +56,7 @@ def get_nearest_weekly_expiry(client) -> str | None:
         return None
 
     expiry_dates = [isoparse(str(d)).date() for d in expiries]
-    today = datetime.now().date()
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     future = [d for d in expiry_dates if d >= today]
     if not future:
         st.error("No future expiry dates found.")
@@ -66,7 +67,7 @@ def get_nearest_weekly_expiry(client) -> str | None:
 
 def get_nifty_option_chain(client, expiry_iso: str):
     """
-    option_chain() response is similarly double-nested in data:[web:19]
+    option_chain() response is similarly double-nested in data:[web:19][web:40]
 
     {
       "status": "success",
@@ -227,7 +228,9 @@ st.caption("Uses DhanHQ Option Chain & Expiry APIs. Educational use only, not tr
 refresh_count = st_autorefresh(interval=2 * 60 * 1000, key="nifty_scan_refresh")
 st.write(f"Auto-refresh count: {refresh_count}")
 
-st.write(f"Last updated at: {datetime.now().strftime('%H:%M:%S')}")
+# IST timestamp
+ist_now = datetime.now(ZoneInfo("Asia/Kolkata"))
+st.write(f"Last updated at (IST): {ist_now.strftime('%d-%m-%Y %H:%M:%S')}")
 
 try:
     client = get_dhan_client()
