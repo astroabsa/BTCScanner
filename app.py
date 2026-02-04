@@ -630,6 +630,15 @@ try:
                 use_container_width=True,
                 height=260,
                 hide_index=True,
+                column_config={
+                    "strike": "Strike",
+                    "ce_ltp": "CE LTP",
+                    "ce_oi": "CE OI",
+                    "ce_vol": "CE Vol",
+                    "pe_ltp": "PE LTP",
+                    "pe_oi": "PE OI",
+                    "pe_vol": "PE Vol",
+                },
             )
 
             # Export option chain window to CSV
